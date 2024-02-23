@@ -1,0 +1,125 @@
+\documentclass[11pt]{scrartcl}
+\usepackage[sexy]{evan}
+\usepackage{graphicx} % Required for inserting images
+\usepackage[backend=biber, style=numeric, sorting=none, natbib=true]{biblatex}
+\addbibresource{bib.bib}
+
+\title{COMP4450 Project Proposal}
+\author{Charles O'Neill}
+\date{February 2024}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+Significant advancements in the capabilities of large language models, underpinned by the transformer backbone \cite{vaswani2017attention}, have prompted many researchers to analyse the causal algorithms that transformers learn as a means of interpreting them. This analysis, termed \textit{mechanistic interpretability}, seeks to deconstruct model components into algorithms that are understandable to humans \cite{olah2018building}. Whilst mechanistic interpretability has succeeded in identifying specific behaviours of language models and even automating the isolation of task-specific circuits \cite{conmy2024towards}, there is still a significant manual and cognitive overhead in analysing these circuits once found. After isolating a subgraph of the neural network seemingly responsible for some task or behaviour, researchers must still manually formulate and examine hypotheses about the functions implemented by each node in the subgraph. This is a significant barrier to the scalability of the mechanistic interpretability discipline, particularly as language models grow exponentially larger \cite{kaplan2020scaling}.
+
+Some efforts have been made to solve this \textit{decoding} problem of translating a model's weights into human-interpretable algorithms. \textcite{friedman2024learning} restrict the computational components of a transformer to create a model that can be trained and then automatically converted into a discrete, human-readable program. Similarly, others have used symbolic regression over recurrent neural networks (RNNs) to distil learned algorithms into Python code \cite{michaud2024opening}. \textcite{tamkin2023codebook}, using quantisation of hidden states, produce a network whose hidden features are a small number of discrete vector codes, which are conducive to feature-mapping and even causal intervention. There have even been attempts to use hypernetworks \cite{krueger2017bayesian} to control model complexity in order to produce families of interpretable algorithms \cite{liao2023generating}.
+
+However, these attempts at decoding weights into interpretable algorithms are fundamentally limited or artificial. Current methods to interpret transformers must define constraints on the transformer weights that guarantee a simple, deterministic mapping between transformer components and programming primitives \cite{friedman2024learning}. They also require a disentangled residual stream to ensure variables are encoded in an orthogonal subspace, which is not a common property of language models \cite{elhage2022toy}. Decoding methods that do not have this limitation have failed to be applied to transformer architectures at all; for instance, \textcite{michaud2024opening} rely on the ability to convert RNNs to finite state automata to be able to compile their Python programs. Another shortcoming of all of the above methods is that they require training a new architecture, either on a wholistic dataset or one specifically engineered to the task at hand. This somewhat defeats the purpose of mechanistic interpretability, which is to understand pretrained models with a standard decoder-only transformer architecture. 
+
+\subsection{Transformers}
+
+\subsubsection{Transformer architecture}
+
+A transformer model consists of alternating multi-headed attention (MHA) and multi-layer perceptron (MLP) layers with residual connections. Multi-headed attention \cite{vaswani2017attention} computes attention maps on sequences of length $N$. A single attention head $i$ first computes an attention pattern
+$$
+A^i=\operatorname{softmax}\left(\left(x W_Q^i\right)\left(x W_K^i\right)^T / \sqrt{d_k}\right) \in \mathbb{R}^{N \times N}
+$$
+for some input $x \in \mathbb{R}^{N \times d}$, where $W_Q^i, W_K^i \in \mathbb{R}^{d \times d_k}$ are learnable parameters. Usually, we call the entries of $\left(x W_K^i\right)$ keys, and the entries of $\left(x W_Q^i\right)$ queries. Multi-headed attention combines $H$ attention heads heads by computing
+$$
+\operatorname{MHA}(x)=\text { Concat }\left[A^1\left(x W_V^1\right), \ldots, A^H\left(x W_V^H\right)\right] W_O
+$$
+where $W_V^i \in \mathbb{R}^{d \times d_v}$ and $W_O \in \mathbb{R}^{H d_v \times d}$ are another set of learnable parameters. We commonly call the entries of $\left(x W_V^i\right)$ values.
+The MLP layers in transformer models compute $\operatorname{MLP}(x)=\sigma\left(x W_1\right) W_2$ where $W_1 \in \mathbb{R}^{d \times h}$, $W_2 \in \mathbb{R}^{h \times d}$ are learnable weights, and $\sigma$ is a non-linear function; for simplicity, we use the Rectified Linear Unit (ReLU). We focus on decoder-only transformers, which consists of alternating blocks of MHA and MLP. These are the types of transformers used as the architecture in most large language models today, such as GPT-4 \cite{achiam2023gpt} and LLaMA 2 \cite{touvron2023llama}. 
+
+\subsubsection{The residual stream}
+The \textit{transformer circuits} perspective introduced by \textcite{elhage2021mathematical} (1) focuses on the transformer being a residual stream architecture and (2) introduces an alternative parameterisation for attention operations. Transformers have residual connections at each attention and MLP layer. \textcite{elhage2021mathematical} consider the residual connections a core feature of the architecture and describe the model in terms of a residual stream that each layer reads from and writes to in sequence. The residual stream acts as a type of memory that earlier layers can use to pass information to later layers.
+
+Parameterising attention as $W_{Q K}$ and $W_{O V}$. We can parameterise an attention head by two (low-rank) matrices $W_{Q K}{ }^i=W_Q^i\left(W_K^i\right)^T / \sqrt{d_k} \in \mathbb{R}^{d \times d}$ and $W_{O V}{ }^i=$ $W_V^i W_O^i \in \mathbb{R}^{d \times d}$ where we split $W_O$ into different heads, such that $W_O=\left[W_O^1, \ldots W_O^H\right]$, where each $W_O^i \in \mathbb{R}^{d_v \times d}$. We can then write MHA as
+$$
+A^i=\operatorname{softmax}\left(x W_{Q K}{ }^i x^T\right) \quad \operatorname{MHA}(x)=\sum_{i=1}^H A^i x W_{O V}{ }^i
+$$
+Importantly, we can think of MHA as summing over the outputs of $H$ independent attention heads, each parameterised by low-rank matrices $W_{Q K}$ and $W_{O V} . W_{Q K}$ acts as a bilinear operator reading from the residual stream, and $W_{O V}$ is a linear operator both reading from and writing to the residual stream. The softmax is the only nonlinearity in an attention head.
+
+
+\subsection{Computational primitives for transformers}
+As discussed above, the lack of a ground-truth for the algorithm being implemented by the circuit is a hindrance to objectively evaluating the supposed mechanistic roles of each circuit component. In other words, it is difficult to know whether the algorithm one \textit{thinks} is being implemented by the circuit is in fact the actual behaviour.
+A key aspect of being able to map the residual streams of transformers to human-understandable algorithms is defining the simple primitives that make up the components of a transformer, specifically attention and multi-layer perceptrons (MLPs). To this end, there are two tools that define the building blocks of transformers such that they are interpretable by design: \texttt{RASP} (\textit{Restricted Access Sequence Processing Language}) and \texttt{Tracr}.
+
+\texttt{RASP} is a programming language for characterising transformer operations \cite{weiss2021thinking}. It provides a conceptual framework for mapping between transformer components and human-readable code. \texttt{Tracr} converts human-readable programs written in RASP into standard decoder-only transformers \cite{lindner2024tracr}. Together, these two tools allow us to do two things. First, we can take pseudocode for a particular algorithm, express it formally in a language that captures the unique information-flow constraints under which a transformer operates as it processes input sequences (RASP), and compile this language into a standard transformer with real weights (Tracr). This represents the \textit{encoding} problem which has evidently been solved.
+
+
+\section{Research Problem}
+
+In line with Sutton's bitter lesson \cite{sutton2019bitter}, we propose a scalable way in which to decode a hidden state of a transformer into an interpretable operation, and thus decode whole algorithms over sequences of hidden states across a forward pass through the network. Utilising existing tools that can compile algorithm pseudocode into working transformers, we collate a dataset of sequences of hidden states and their corresponding operation in pseudocode. This pseudocode comes from a variety of tasks, from list reversal to tasks studied in the wild, such as in-context induction. We train a neural network on these sequences to label the current sequence's pseudocode. We then show that the same neural network understands the hidden states of transformers trained from scratch on these tasks, demonstrating how our compiled transformers produce knowledge that translates directly to operations learned by standard transformers. Finally, we extract a known circuit from GPT-2 used for indirect object identification and demonstrate that our trained transformer is capable of interpreting circuits in real-world large language models. 
+
+\subsection{Shortcomings of current approaches to decoding circuits}
+Mechanistic interpretability refers to the general study of how to reverse-engineer neural networks to find human-interpretable algorithms. Algorithms in transformers use \textit{features}, a property of a model's input that constitutes an ``independent unit'' in the network. \textit{Circuits} as a subset of a model's weights implement these algorithms by mapping earlier features to later features. 
+
+Much of previous literature chooses to isolate specific circuits to analyse consists of the following workflow \cite{conmy2024towards}. Researchers will first identify a repeatable behaviour that a transformer displays, create a dataset that reproduces the behaviour in question, and choose a metric that evaluates the ability of a function to perform the task. After defining the scope of the interpretation of model components, researchers will perform an extensive series of iterative patching experiments with the goal of removing as many computational components as possible such that that remaining circuit still performs the task. They will then seek to understand how the isolated circuit is implementing the task as an algorithm. 
+
+This workflow is evident in many different analyses of types of behaviours. For instance, the \textbf{Indirect Object Identification (IOI) task} refers to the ability of models to identify that sentences such as ``When John and Mary went to the store, John gave the bag to'' should end with Mary, rather than John. \textcite{wang2022interpretability} randomly set activations of specific neurons in attention heads to their mean activation across the dataset in order to identify the components responsible for implementing this behaviour. Another common task is completing Python docstrings (the \textbf{Docstring Task}). By also ablating different model components with corrupted inputs, \textcite{heimersheim2023circuit} found a circuit in a pre-trained 4-layer attention-only transformer that predicts repeated argument names in docstrings of Python functions. Other common behaviours and tasks are listed in Table . 
+
+\begin{table}[htbp] % 'here', 'top', 'bottom', 'page' (or 'float') options for placement
+\centering % Centers the table
+\begin{tabular}{|c|p{0.3\textwidth}|c|c|}
+\hline
+\textbf{Task} & \textbf{Example Prompt} & \textbf{Output} & \textbf{Metric} \\ \hline
+IOI & ``When John and Mary went to the store, Mary gave a bottle of milk to'' & ``John'' & Logit difference \\ \hline
+Docstring & def $f($ self, files, obj, state, size, shape, option): "document string example :param state: performance analysis :param size: pattern design :param" & ``\texttt{shape}'' & Logit difference \\ \hline
+Greater-Than & ``The war lasted from 1517 to 15'' & ``18'' $\ldots$ ``99'' & Prob. difference \\ \hline
+tracr-xproportion & ["a", "x", "b", "x"] & {$[0,0.5$, $0.33,0.5]$} & MSE \\ \hline
+tracr-reverse & {$[0,3,2,1]$} & {$[1,2,3,0]$} & MSE \\ \hline
+Induction & "Vernon Dursley and Petunia Durs" & "ley" & Neg. log-prob \\ \hline
+\end{tabular}
+\caption{Five behaviors for which we have an end-to-end circuit from previous mechanistic interpretability work, plus Induction. We automatically rediscover the circuits for behaviors 1-5 in Section 4. Tokens beginning with space have a "-" prepended for clarity.}
+\label{tab:behaviors} % For referencing the table in text
+\end{table}
+
+
+\color{blue}
+Things to discuss:
+\begin{itemize}
+\item (Briefly) how people find circuits manually
+\item How they analyse the individual components of circuits doing the implementation
+\item Why this is a time-consuming and labour-intensive process
+\item Why this analysis of the found circuit is not very objective - don't have a ground-truth of the algorithm being implemented
+\end{itemize}
+\color{black}
+
+
+An essential goal in mechanistic interpretability is to \textit{decode} a network i.e. to convert a neural network's raw weights to an interpretable algorithm. However, as seen through the above examples, this decoding process is both time-consuming and labour-intensive. Further, the algorithm implemented by the circuit cannot be objectively verified as there is no ground-truth \cite{yang2019evaluating}. Given the difficulty of the decoding problem, progress has been made to understand the easier \textit{encoding} problem i.e. to convert an interpretable algorithm into network weights. Previous work focuses on encoding existing algorithms into networks, which are interpretable by definition \cite{lindner2024tracr, weiss2021thinking}. This can also provide a ground-truth for testing mechanistic interpretability techniques on real transformer models. 
+
+\subsection{Proposed solution: mapping arbitrary residual streams to RASP code}
+\color{blue} Link to computational primitives section.\color{black} However, our work contends that these tools can also be used to make traction on the \textit{decoding} problem. If we take transformers compiled by Tracr from RASP programs, \textbf{we are immediately given a label for the computation being performed by a particular attention or MLP block in the transformer}. We argue that by curating a dataset of sequences of residual streams and their corresponding RASP labels, across large numbers of algorithmic behaviours (from RASP-defined primitives to complex tasks like the IOI task and the Greater-Than task) we may be able to teach a model to interpret residual streams in human-readable RASP code. This in turn can easily be translated into natural language (for instance, with LLMs such as GPT-4). 
+
+\color{blue}
+\begin{itemize}
+\item Argue that your proposed contribution to the research problem will indeed
+help with the real-world problem;
+\item Discuss what has already been done in this area (without going into the detail of a literature review); and
+\item Explain why your work will represent an advance on what has been done
+before.
+\end{itemize}
+\color{black}
+
+\section{Methodology}
+
+\subsection{Possible extensions and alternative interpretations of residual streams}
+
+\color{blue}
+Alternatives:
+\begin{itemize}
+\item VQ-VAE with perplexity loss on hidden states
+\item VQ-VAE for sequences of residual streams $\rightarrow$ sequence of codes $\rightarrow$ pick up algorithms in real-world circuits
+\end{itemize}
+\color{black}
+
+\section{Evaluation Criteria}
+
+\printbibliography %Prints bibliography
+
+\end{document}
