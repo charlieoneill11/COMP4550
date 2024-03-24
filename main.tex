@@ -4,6 +4,25 @@
 \usepackage[backend=biber, style=numeric, sorting=none, natbib=true]{biblatex}
 \addbibresource{bib.bib}
 
+\usepackage{xcolor}         % colors
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{algorithm2e}
+\usepackage{subcaption}
+
+\captionsetup[table]{skip=7pt}
+
+% Global settings for listings
+\lstset{
+    basicstyle=\scriptsize\ttfamily, % or \small or \footnotesize
+    breaklines=true,
+    frame=none,
+}
+
 \title{COMP4450 Project Proposal}
 \author{Charles O'Neill}
 \date{February 2024}
@@ -14,47 +33,60 @@
 
 \section{Introduction}
 
-Significant advancements in the capabilities of large language models, underpinned by the transformer backbone \cite{vaswani2017attention}, have prompted many researchers to analyse the causal algorithms that transformers learn as a means of interpreting them. This analysis, termed \textit{mechanistic interpretability}, seeks to deconstruct model components into algorithms that are understandable to humans \cite{olah2018building}. Whilst mechanistic interpretability has succeeded in identifying specific behaviours of language models and even automating the isolation of task-specific circuits \cite{conmy2024towards}, there is still a significant manual and cognitive overhead in analysing these circuits once found. After isolating a subgraph of the neural network seemingly responsible for some task or behaviour, researchers must still manually formulate and examine hypotheses about the functions implemented by each node in the subgraph. This is a significant barrier to the scalability of the mechanistic interpretability discipline, particularly as language models grow exponentially larger \cite{kaplan2020scaling}.
+Significant advancements in the capabilities of large language models, underpinned by the transformer backbone \citep{vaswani2017attention}, have prompted many researchers to analyse and interpret the causal algorithms that transformers learn. This analysis, termed \textit{mechanistic interpretability}, seeks to deconstruct model components into algorithms that are understandable to humans \citep{olah2018building}. Whilst mechanistic interpretability has succeeded in identifying specific behaviours of language models and even automating the isolation of task-specific circuits \citep{conmy2024towards, cao2021low, michel2019sixteen}, there is still a significant manual and cognitive overhead in analysing these circuits once found. After isolating a subgraph of the neural network seemingly responsible for some task or behaviour, researchers must still manually formulate and examine hypotheses about the functions implemented by each node in the subgraph. This is a significant barrier to the scalability of the mechanistic interpretability discipline, particularly as language models grow exponentially larger \citep{kaplan2020scaling}.
 
-Some efforts have been made to solve this \textit{decoding} problem of translating a model's weights into human-interpretable algorithms. \textcite{friedman2024learning} restrict the computational components of a transformer to create a model that can be trained and then automatically converted into a discrete, human-readable program. Similarly, others have used symbolic regression over recurrent neural networks (RNNs) to distil learned algorithms into Python code \cite{michaud2024opening}. \textcite{tamkin2023codebook}, using quantisation of hidden states, produce a network whose hidden features are a small number of discrete vector codes, which are conducive to feature-mapping and even causal intervention. There have even been attempts to use hypernetworks \cite{krueger2017bayesian} to control model complexity in order to produce families of interpretable algorithms \cite{liao2023generating}.
+It is well agreed that using manual inspection to find circuits in language models is untenable \citep{lieberum2023does}, particularly as the scale of language models grows \citep{he2024dictionary}. However, automated circuit identification algorithms currently suffers from several issues. Current algorithms are highly sensitive to the metric used to determine whether a model component is in the circuit or not \citep{conmy2024towards}. They are also sensitive to the type of attribution patching used to ablate model components, such as zero patching \citep{olsson2022context}, mean patching \citep{wang2022interpretability} or substitution patching \citep{geiger2021causal}. Finally, the methods are complex, brittle and computationally intensive. For instance, ACDC \citep{conmy2024towards} takes up to several hours to run on an A100 GPU, which make up the majority of their experiments. Even confining the analysis to just attention heads, as we do in here, takes 8 minutes on an A100 GPU for GPT-2 small.
 
-However, these attempts at decoding weights into interpretable algorithms are fundamentally limited or artificial. Current methods to interpret transformers must define constraints on the transformer weights that guarantee a simple, deterministic mapping between transformer components and programming primitives \cite{friedman2024learning}. They also require a disentangled residual stream to ensure variables are encoded in an orthogonal subspace, which is not a common property of language models \cite{elhage2022toy}. Decoding methods that do not have this limitation have failed to be applied to transformer architectures at all; for instance, \textcite{michaud2024opening} rely on the ability to convert RNNs to finite state automata to be able to compile their Python programs. Another shortcoming of all of the above methods is that they require training a new architecture, either on a wholistic dataset or one specifically engineered to the task at hand. This somewhat defeats the purpose of mechanistic interpretability, which is to understand pretrained models with a standard decoder-only transformer architecture. 
+Currently, researchers have attacked this problem by iterating over all model components, ablating each in turn, and determining how the model's ability to predict the next token correctly in the task suffers. For instance, \citet{conmy2024towards} iterate backwards from the output node through the computational graph, attempting to remove as many edges as possible without reducing model performance on a pre-defined metric. Similarly, \citet{michel2019sixteen} rank heads by important scores and keep only heads in the top $k$ scores. \citet{cao2021low} instead use accuracy and a sparsity penalty to learn a mask over model components. These have all been shown to be highly sensitive to metric selection, hyperparameter choice and the type of ablation used \citep{conmy2024towards}.
 
-\subsection{Transformers}
+To address these issues, we show that sparse autoencoders trained on the outputs of model components can learn features that make circuit discovery an almost trivial task. Sparse autoencoders have recently seen success in mechanistic interpretability as a way to identify features in language models that can automatically be interpreted \citep{cunningham2023sparse}. They have also been used to disentangle features distributed across multiple neurons in transformers \citep{sharkey2022taking, bricken2023towards, elhage2021mathematical}. Use of discrete bottleneck representations rather than continuous activations has also been shown to extract meaningful and interpretable representations from transformer activations \citep{tamkin2023codebook}.
 
-\subsubsection{Transformer architecture}
+Our main contribution is the introduction of a highly performant yet extremely simple circuit-identification method that uses the presence of features in sparse autoencoders trained on transformer attention head outputs. By looking at the max-activating feature in the autoencoder representation of any given attention head, we discretise our representations as integer codes. We then show that just by looking for the presence of codes within positive examples of a circuit, we can find the nodes in the ground-truth circuit \textit{at a better precision and recall than existing methods}. Similarly, by looking at the co-occurrence of codes between attention heads, we can identify the circuit by its edges \textit{at an equal precision and recall to the existing state-of-the-art}. We demonstrate that our performance is robust to hyperparameter choice across three well-studied circuits (indirect object identification, greater-than, and docstring completion).
 
-A transformer model consists of alternating multi-headed attention (MHA) and multi-layer perceptron (MLP) layers with residual connections. Multi-headed attention \cite{vaswani2017attention} computes attention maps on sequences of length $N$. A single attention head $i$ first computes an attention pattern
+\subsection{Autoregressive transformers and the residual stream}
+
+\paragraph{High-level}
+
+Autoregressive, decoder-only transformers rely on the mechanism of self-attention, which allows the model to weigh the importance of different parts of the input sequence in relation to each other \citep{vaswani2017attention}. Initially, each token in the sequence is embedded into a high-dimensional space, represented as \(X \in \mathbb{R}^{N \times d}\), where \(N\) denotes the sequence length and \(d\) the dimensionality of the embeddings. The self-attention mechanism operates on these embeddings by generating three distinct sets of vectors for each token: queries (\(Q\)), keys (\(K\)), and values (\(V\)). These are obtained through linear transformations of the input embeddings, \(Q = XW^Q\), \(K = XW^K\), and \(V = XW^V\), with \(W^Q, W^K, W^V \in \mathbb{R}^{d \times d_h}\) as the corresponding learnable weight matrices.
+
+Prior to the application of multihead attention, a preliminary self-attention score is calculated to guide the model's focus across the input sequence. This score, denoted as \(A\), is computed using the formula \(A = \text{softmax}\left(\frac{QK^T}{\sqrt{d_h}}\right)\), where \(A \in \mathbb{R}^{N \times N}\) represents the attention weights between all pairs of tokens.
+
+Multihead attention extends this mechanism by employing multiple, parallel attention heads, each with its unique set of weight matrices, thereby enabling the model to capture a richer array of relationships within the data. The output of the \(i\)-th attention head is given by \(A^i = \text{softmax}\left(\frac{(QW_Q^i)(KW_K^i)^T}{\sqrt{d_k}}\right)\), and the overall multihead attention block output is a concatenation of the individual heads' outputs, \( \operatorname{MHA}(X) = \text{Concat}\left[A^1V^1, \ldots, A^HV^H\right]W^O \), where \(W^O \in \mathbb{R}^{Hd_h \times d}\) is a learnable matrix.
+
+Following an attention block, the multi-layer perceptron (MLP) layers process the data further. An MLP layer applies a non-linear activation function, typically the Rectified Linear Unit (ReLU), after each linear transformation, formulated as \(\operatorname{MLP}(x) = \sigma(xW_1 + b_1)W_2 + b_2\), with \(W_1 \in \mathbb{R}^{d \times h}\), \(W_2 \in \mathbb{R}^{h \times d}\), and \(b_1, b_2\) as bias vectors. Importantly, there are residual connections before and after each attention and MLP block, which allows for direct information flow across layers. 
+
+\paragraph{Residual stream as the core computational object}
+In the transformer architecture, a key feature is the use of residual connections, which allow for the passage of information across different layers. \citet{elhage2021mathematical} introduce a perspective that views these connections not just as auxiliary pathways but as central to the model's operation, coining this the `residual stream' architecture. This residual stream serves as a dynamic memory, enabling the transfer of information from earlier to later layers, ensuring that each layer has access to not only its immediate inputs but also to the cumulative knowledge processed by the model thus far.
+
+\citet{elhage2021mathematical} propose an alternative way to parameterise attention operations, focusing on simplifying the complexity by using two specific sets of low-rank matrices: \(W_{QK}\) for query-key interactions and \(W_{OV}\) for output-value mappings. Each attention head is defined by \(W_{QK}^i = W_Q^i(W_K^i)^T / \sqrt{d_k}\) and \(W_{OV}^i = W_V^iW_O^i\), where \(W_O\) is divided among the heads \citep{lindner2024tracr}. In this formulation, multi-head attention can be viewed as the aggregation of the outputs from \(H\) independent attention heads, with each head contributing to the overall output by reading from and writing to the residual stream.
+\begin{align*}
+A^i &= \text{softmax}(xW_{QK}^ix^T) & \text{MHA}(x) = \sum_{i=1}^H A^ixW_{OV}^i
+\end{align*}
+The attention mechanism is thereby represented as a combination of bilinear (\(W_{QK}\)) and linear (\(W_{OV}\)) operations, save for the softmax nonlinearity.
+
+By applying autoencoders to the outputs of individual attention heads, it becomes possible to distill the contributions of each head into a cohesive representation of the residual stream. This method effectively encapsulates the layer-by-layer transformation of information within the transformer. By learning a representation of the output of each individual attention head, we can study these representations to understand how individual heads compute in isolation and then build this up to an understanding of the whole residual stream.
+
+\subsection{Sparse dictionary learning}
+
+Sparse dictionary learning is an established method for decomposing signals into sparse linear combinations of basis elements \citep{olshausen1997sparse, lee2006efficient}. Given a set of vectors \(\{\mathbf{x}_i\}_{i=1}^{n_{\text{vec}}}\) within a high-dimensional space \(\mathbb{R}^d\), the goal is to express each vector as a sparse combination of a predefined set of basis vectors or dictionary features \(\{\mathbf{f}_k\}_{k=1}^{n_{\text{feat}}}\), such that \(\mathbf{x}_i \approx \sum_j a_{i, j} \mathbf{f}_j\), where \(\mathbf{a}_i\) is a sparse vector.
+
+The internal activations of a pretrained transformer, such as GPT-2 \citep{radford2019language}, can be viewed as our data vectors \(\mathbf{x}_i\). We seek to decompose these into sparse linear combinations of unknown, yet significant, network features or ground truth vectors \(\{\mathbf{g}_j\}_{j=1}^{n_{\text{gt}}}\). The pursuit of learning a dictionary \(\{\mathbf{f}_k\}\) that approximates the ground truth network features is typically tackled with sparse autoencoders \citep{sharkey2022taking}. Following the approach of \citet{cunningham2023sparse}, we use an autoencoder with a single hidden layer, and tied weights for the encoder $E$ and decoder $D$, meaning $D=E^T$. A single forward pass through the autoencoder can be expressed as:
+\begin{align*}
+\mathbf{z} &= \text{ReLU}(E\mathbf{x}+\mathbf{b}) \\
+\mathbf{\hat{x}} &= D\mathbf{z} = E^T \mathbf{z}
+\end{align*}
+The hidden layer activations \(\mathbf{z} = \text{ReLU}(E \mathbf{x} + \mathbf{b})\) represent the coefficients used in reconstructing the input vector \(\mathbf{x}\), with \(E \in \mathbb{R}^{n_\text{feat}\times d_\text{model}}\) constituting the learned dictionary. Here, $n_\text{feat}$ is the number of basis vectors or dictionary features we want to learn, and $d_\text{model}$ is the size of the vectors in our input. Thus, the rows of $E$ are the dictionary features $\mathbf{f}_i$. The objective function to minimise is a combination of reconstruction loss and $\ell_1$ penalty on the bottleneck representation $\mathbf{z}$:
 $$
-A^i=\operatorname{softmax}\left(\left(x W_Q^i\right)\left(x W_K^i\right)^T / \sqrt{d_k}\right) \in \mathbb{R}^{N \times N}
+\mathcal{L}(\mathbf{x})=\overbrace{\|\mathbf{x}-\hat{\mathbf{x}}\|_2^2}^{\text {reconstruction loss }}+\overbrace{\lambda\|\mathbf{z}\|_1}^{\text {sparsity $\ell_1$ penalty }}
 $$
-for some input $x \in \mathbb{R}^{N \times d}$, where $W_Q^i, W_K^i \in \mathbb{R}^{d \times d_k}$ are learnable parameters. Usually, we call the entries of $\left(x W_K^i\right)$ keys, and the entries of $\left(x W_Q^i\right)$ queries. Multi-headed attention combines $H$ attention heads heads by computing
-$$
-\operatorname{MHA}(x)=\text { Concat }\left[A^1\left(x W_V^1\right), \ldots, A^H\left(x W_V^H\right)\right] W_O
-$$
-where $W_V^i \in \mathbb{R}^{d \times d_v}$ and $W_O \in \mathbb{R}^{H d_v \times d}$ are another set of learnable parameters. We commonly call the entries of $\left(x W_V^i\right)$ values.
-The MLP layers in transformer models compute $\operatorname{MLP}(x)=\sigma\left(x W_1\right) W_2$ where $W_1 \in \mathbb{R}^{d \times h}$, $W_2 \in \mathbb{R}^{h \times d}$ are learnable weights, and $\sigma$ is a non-linear function; for simplicity, we use the Rectified Linear Unit (ReLU). We focus on decoder-only transformers, which consists of alternating blocks of MHA and MLP. These are the types of transformers used as the architecture in most large language models today, such as GPT-4 \cite{achiam2023gpt} and LLaMA 2 \cite{touvron2023llama}. 
+With an appropriate choice of the sparsity hyperparameter $\lambda$, \citet{wright2022high} have shown that the autoencoder can successfully identify the set of overcomplete bases \(\mathbf{d}\) such that any activation vector \(\mathbf{x}\) can be sparsely represented as \(\mathbf{x} \approx \sum_i w_i \mathbf{d}_i\), minimising the number of non-zero coefficients \(w_i\).
 
-\subsubsection{The residual stream}
-The \textit{transformer circuits} perspective introduced by \textcite{elhage2021mathematical} (1) focuses on the transformer being a residual stream architecture and (2) introduces an alternative parameterisation for attention operations. Transformers have residual connections at each attention and MLP layer. \textcite{elhage2021mathematical} consider the residual connections a core feature of the architecture and describe the model in terms of a residual stream that each layer reads from and writes to in sequence. The residual stream acts as a type of memory that earlier layers can use to pass information to later layers.
+\paragraph{Discretising the sparse activations}
+The strength of the sparsity penalty will ultimately determine the $\ell_0$ norm of the learned activations i.e. the number of non-zero coefficients $w_i$. Interestingly, if we consider one forward pass through the model as a single matrix of shape \texttt{(n\_heads, n\_features)}, we can simply take the argmax over the feature dimension and obtain a sequence of \texttt{n\_heads} ``codes'' that represent the computation of all attention heads for that particular input to the model. This yields a discrete bottleneck representation analogous to vector quantisation \cite{van2017neural}. The comparisons between our approach and quantisation approaches are discussed in Appendix \ref{app:vqvae}.
 
-Parameterising attention as $W_{Q K}$ and $W_{O V}$. We can parameterise an attention head by two (low-rank) matrices $W_{Q K}{ }^i=W_Q^i\left(W_K^i\right)^T / \sqrt{d_k} \in \mathbb{R}^{d \times d}$ and $W_{O V}{ }^i=$ $W_V^i W_O^i \in \mathbb{R}^{d \times d}$ where we split $W_O$ into different heads, such that $W_O=\left[W_O^1, \ldots W_O^H\right]$, where each $W_O^i \in \mathbb{R}^{d_v \times d}$. We can then write MHA as
-$$
-A^i=\operatorname{softmax}\left(x W_{Q K}{ }^i x^T\right) \quad \operatorname{MHA}(x)=\sum_{i=1}^H A^i x W_{O V}{ }^i
-$$
-Importantly, we can think of MHA as summing over the outputs of $H$ independent attention heads, each parameterised by low-rank matrices $W_{Q K}$ and $W_{O V} . W_{Q K}$ acts as a bilinear operator reading from the residual stream, and $W_{O V}$ is a linear operator both reading from and writing to the residual stream. The softmax is the only nonlinearity in an attention head.
-
-
-\subsection{Computational primitives for transformers}
-As discussed above, the lack of a ground-truth for the algorithm being implemented by the circuit is a hindrance to objectively evaluating the supposed mechanistic roles of each circuit component. In other words, it is difficult to know whether the algorithm one \textit{thinks} is being implemented by the circuit is in fact the actual behaviour.
-A key aspect of being able to map the residual streams of transformers to human-understandable algorithms is defining the simple primitives that make up the components of a transformer, specifically attention and multi-layer perceptrons (MLPs). To this end, there are two tools that define the building blocks of transformers such that they are interpretable by design: \texttt{RASP} (\textit{Restricted Access Sequence Processing Language}) and \texttt{Tracr}.
-
-\texttt{RASP} is a programming language for characterising transformer operations \cite{weiss2021thinking}. It provides a conceptual framework for mapping between transformer components and human-readable code. \texttt{Tracr} converts human-readable programs written in RASP into standard decoder-only transformers \cite{lindner2024tracr}. Together, these two tools allow us to do two things. First, we can take pseudocode for a particular algorithm, express it formally in a language that captures the unique information-flow constraints under which a transformer operates as it processes input sequences (RASP), and compile this language into a standard transformer with real weights (Tracr). This represents the \textit{encoding} problem which has evidently been solved.
 
 
 \section{Research Problem}
-
-In line with Sutton's bitter lesson \cite{sutton2019bitter}, we propose a scalable way in which to decode a hidden state of a transformer into an interpretable operation, and thus decode whole algorithms over sequences of hidden states across a forward pass through the network. Utilising existing tools that can compile algorithm pseudocode into working transformers, we collate a dataset of sequences of hidden states and their corresponding operation in pseudocode. This pseudocode comes from a variety of tasks, from list reversal to tasks studied in the wild, such as in-context induction. We train a neural network on these sequences to label the current sequence's pseudocode. We then show that the same neural network understands the hidden states of transformers trained from scratch on these tasks, demonstrating how our compiled transformers produce knowledge that translates directly to operations learned by standard transformers. Finally, we extract a known circuit from GPT-2 used for indirect object identification and demonstrate that our trained transformer is capable of interpreting circuits in real-world large language models. 
 
 \subsection{Shortcomings of current approaches to decoding circuits}
 Mechanistic interpretability refers to the general study of how to reverse-engineer neural networks to find human-interpretable algorithms. Algorithms in transformers use \textit{features}, a property of a model's input that constitutes an ``independent unit'' in the network. \textit{Circuits} as a subset of a model's weights implement these algorithms by mapping earlier features to later features. 
@@ -62,22 +94,6 @@ Mechanistic interpretability refers to the general study of how to reverse-engin
 Much of previous literature chooses to isolate specific circuits to analyse consists of the following workflow \cite{conmy2024towards}. Researchers will first identify a repeatable behaviour that a transformer displays, create a dataset that reproduces the behaviour in question, and choose a metric that evaluates the ability of a function to perform the task. After defining the scope of the interpretation of model components, researchers will perform an extensive series of iterative patching experiments with the goal of removing as many computational components as possible such that that remaining circuit still performs the task. They will then seek to understand how the isolated circuit is implementing the task as an algorithm. 
 
 This workflow is evident in many different analyses of types of behaviours. For instance, the \textbf{Indirect Object Identification (IOI) task} refers to the ability of models to identify that sentences such as ``When John and Mary went to the store, John gave the bag to'' should end with Mary, rather than John. \textcite{wang2022interpretability} randomly set activations of specific neurons in attention heads to their mean activation across the dataset in order to identify the components responsible for implementing this behaviour. Another common task is completing Python docstrings (the \textbf{Docstring Task}). By also ablating different model components with corrupted inputs, \textcite{heimersheim2023circuit} found a circuit in a pre-trained 4-layer attention-only transformer that predicts repeated argument names in docstrings of Python functions. Other common behaviours and tasks are listed in Table . 
-
-\begin{table}[htbp] % 'here', 'top', 'bottom', 'page' (or 'float') options for placement
-\centering % Centers the table
-\begin{tabular}{|c|p{0.3\textwidth}|c|c|}
-\hline
-\textbf{Task} & \textbf{Example Prompt} & \textbf{Output} & \textbf{Metric} \\ \hline
-IOI & ``When John and Mary went to the store, Mary gave a bottle of milk to'' & ``John'' & Logit difference \\ \hline
-Docstring & def $f($ self, files, obj, state, size, shape, option): "document string example :param state: performance analysis :param size: pattern design :param" & ``\texttt{shape}'' & Logit difference \\ \hline
-Greater-Than & ``The war lasted from 1517 to 15'' & ``18'' $\ldots$ ``99'' & Prob. difference \\ \hline
-tracr-xproportion & ["a", "x", "b", "x"] & {$[0,0.5$, $0.33,0.5]$} & MSE \\ \hline
-tracr-reverse & {$[0,3,2,1]$} & {$[1,2,3,0]$} & MSE \\ \hline
-Induction & "Vernon Dursley and Petunia Durs" & "ley" & Neg. log-prob \\ \hline
-\end{tabular}
-\caption{Five behaviors for which we have an end-to-end circuit from previous mechanistic interpretability work, plus Induction. We automatically rediscover the circuits for behaviors 1-5 in Section 4. Tokens beginning with space have a "-" prepended for clarity.}
-\label{tab:behaviors} % For referencing the table in text
-\end{table}
 
 
 \color{blue}
@@ -91,21 +107,7 @@ Things to discuss:
 \color{black}
 
 
-An essential goal in mechanistic interpretability is to \textit{decode} a network i.e. to convert a neural network's raw weights to an interpretable algorithm. However, as seen through the above examples, this decoding process is both time-consuming and labour-intensive. Further, the algorithm implemented by the circuit cannot be objectively verified as there is no ground-truth \cite{yang2019evaluating}. Given the difficulty of the decoding problem, progress has been made to understand the easier \textit{encoding} problem i.e. to convert an interpretable algorithm into network weights. Previous work focuses on encoding existing algorithms into networks, which are interpretable by definition \cite{lindner2024tracr, weiss2021thinking}. This can also provide a ground-truth for testing mechanistic interpretability techniques on real transformer models. 
-
-\subsection{Proposed solution: mapping arbitrary residual streams to RASP code}
-We have seen above that current attempts to decode transformer weights into interpretable algorithms are labour-intensive, brittle, and restrictive. Additionally, we have seen that the reverse encoding problem has easily been solved with tools such as \texttt{Tracr} and \texttt{RASP}. This work proposes that the use of the latter tools can also be used to make traction on the difficult \textit{decoding} problem.
-
-% However, our work contends that these tools can also be used to make traction on the \textit{decoding} problem. 
-
-If we take transformers compiled by Tracr from RASP programs, \textbf{we are immediately given a label for the computation being performed by a particular attention or MLP block in the transformer}. We argue that by curating a dataset of sequences of residual streams and their corresponding RASP labels, across large numbers of algorithmic behaviours (from RASP-defined primitives to complex tasks like the IOI task and the Greater-Than task) we may be able to teach a model to interpret residual streams in human-readable RASP code. This in turn can easily be translated into natural language (for instance, with LLMs such as GPT-4). 
-
-This represents an advancement on current approaches to the decoding problem largely because it allows residual stream interpretability in real models. 
-\begin{itemize}
-\item The existing methods outlined above require retraining on a specific task with a completely different architecture in order to reap the interpretability benefits \cite{friedman2024learning, michaud2024opening, tamkin2023codebook, liao2023generating}. \color{green}We instead will use existing residual streams of standard transformers as a basis for our training data that will learn how to do this from scratch. This allows us to interpret pre-trained transformers that are already used for various tasks. \color{black} 
-\item The constraints on the transformer weights imposed by \textcite{friedman2024learning} to ensure a deterministic mapping between components and RASP code are restrictive and place each variable into an orthogonal subspace. This is not how neural networks act in practice; instead, they often ``cram'' many unrelated concepts into a single neuron (polysemanticity), allowing the model to represent more features than it has dimensions. This phenomenon is known as \textit{superposition} \cite{elhage2022toy}. \color{green} Whilst we also compile transformers with orthogonal subspaces for training, we will show that learning a mapping rather than deterministically compiling allows our interpreter model to identify the same algorithms even when superposition is involved. There is evidence for this in the original \texttt{Tracr} paper \cite{lindner2024tracr}. \color{black}
-\item The modified architectures for interpretability significantly under-perform the standard transformer architecture with the same number of parameters \cite{friedman2024learning} (CITE BACKPACK MODELS). Alternatively, they rely on a different, sub-par recurrent model altogether, as in \cite{michaud2024opening}. \color{green} Since we are not changing the underlying architecture of the models we are analysing, we will gain interpretability benefits without compromising the capability of the underlying model. 
-\end{itemize}
+\subsubsection{Limitations of the interpreter model approach}
 
 \color{blue}
 \begin{itemize}
@@ -117,19 +119,163 @@ before.
 \end{itemize}
 \color{black}
 
+
+
 \section{Methodology}
 
-\subsection{Possible extensions and alternative interpretations of residual streams}
+\subsection{Datasets}
 
-\color{blue}
-Alternatives:
+For each task, we compile a dataset consisting of 250 ``positive'' examples $\left\{x_i\right\}_{i=1}^n$ and 250 ``negative'' examples $\left\{x_i^{\prime}\right\}_{i=1}^n$. Positive examples are sequences of tokens where, in order to predict the next token correctly, the model must exhibit behaviour we want to study. Negative examples are highly semantically similar to the positive examples, but have been corrupted in some small manner which means there is no longer a correct ``next token''. Positive and negative examples for each of the three tasks, along with the corresponding answer for the positive example, are shown in Table \ref{tab:examples}.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}p{2cm}p{4cm}p{4cm}p{2.25cm}@{}}
+\toprule
+\textbf{Task }      & \textbf{Positive Example}                                              & \textbf{Negative Example}  & \textbf{Answer} \\ \addlinespace
+\textit{IOI}        & ``When \textbf{Elon} and \textbf{Sam} finished their meeting, \textbf{Elon} gave the model to '' & ``When \textbf{Elon} and \textbf{Sam} finished their meeting, \textbf{Andrej} gave the model to '' & ``Sam''    \\
+\addlinespace % Adds default vertical space
+\textit{Greater-than} & ``The AI war lasted from \textbf{2024} to \textbf{20}'' & ``The AI war lasted from \textbf{2024} to \textbf{19}'' & Any two digit number $>24$      \\
+\vspace{2.5mm} \textit{Docstring}  & \begin{lstlisting}
+def old(self, page, names, size):
+    """sector gap"""
+    
+    :param page: message tree
+    :param names: detail mine
+    :param\end{lstlisting}               &  \begin{lstlisting}
+def old(self, page, names, size):
+    """sector gap"""
+    
+    :param image: message tree
+    :param update: detail mine
+    :param\end{lstlisting} 
+    &   \vspace{2.5mm} \texttt{size}   \\ \bottomrule
+\end{tabular}
+\caption{Task-specific positive and negative examples. Positive examples are designed to elicit the behaviour being studied when the model conducts next token prediction on the example. Negative examples are designed to be semantically similar to the positive examples but with minor changes that mean there is now no obviously correct answer, and hence the model shouldn't just use the circuit responsible for the task-specific behaviour. The answer column refers to the correct answer for the positive examples.}
+\label{tab:examples}
+\end{table}
+
+\paragraph{Indirect object identification (IOI)}
+
+The task of Indirect Object Identification (IOI) involves analysing sentences that comprise a dependent clause setting the scene, such as ``After the meeting between Elon and Sam'', followed by a primary clause that details an action, for instance, ``Elon handed a set of documents to Sam''. In this structure, the dependent clause introduces the indirect object (IO), ``Sam'', alongside the subject (S), ``Elon''. The primary clause mentions the subject again and describes the act of the subject giving an item to the IO. The objective of the IOI task is to accurately identify the sentence's concluding token as the IO. The circuit found in GPT-2 that implements this behaviour was originally identified by \citet{wang2022interpretability}, who found 26 different attention heads involved in the circuit.
+
+
+\paragraph{Greater-than}
+
+The greater-than task is designed to evaluate a model's understanding of numerical sequences within a textual context, specifically focusing on recognising temporal durations. Sentences are constructed following a pattern that describes an event's duration, such as ``The \texttt{<event>} took place from the year \texttt{XXYY} to the year \texttt{ZZ}''. The critical aspect of this task is for the model to discern that the concluding year, represented by the predicted token following \texttt{ZZ}, must be greater than the starting year \texttt{YY}. The circuit found in GPT-2 that implements the greater-than prediction was identified by \citet{hanna2024does}.
+
+\paragraph{Docstring}
+
+The docstring task assesses a model's ability to accurately predict argument names within Python docstrings based on the function's argument list. In this context, a docstring is a structured comment that describes a Python function, including its arguments. The conventional format for such docstrings involves lines starting with \texttt{:param} followed by an argument name, making the task of predicting argument names from the sequence both relevant and predictable. This task is exemplified through functions with randomly generated arguments, such as \texttt{load}, \texttt{size}, \texttt{files}, and \texttt{last}. The model is challenged to predict the next argument name in the docstring, following the \texttt{:param tag}. This circuit was identified in a 4-layer attention-only transformer trained from scratch by \citet{heimersheim2023circuit}.
+
+\subsection{Model and circuit identification with learned features}
+
+Our methodology can be broken down into two stages: training the sparse autoencoder to conduct dictionary learning on the cached model activations (which is a standard process implemented in many other papers), and using these learned representations to identify model components involved in the circuit for the task at hand.
+
+\paragraph{Training the autoencoder to get learned features}
+We first take all positive and negative input prompts for a dataset and tokenise them. Due to curating each prompt (for all datasets) so that all positive and negative examples are the same number of tokens, we concatenate all prompts into a single tensor $\mathbf{t} = \left\{x_i\right\}_{i=1}^n \bigcup \left\{x_i^\prime\right\}_{i=1}^n \in \mathbb{R}^{n_\text{examples}\times n_\text{heads} \times d_\text{model}}$. We randomly sample 80\% of the 500 examples for training and keep the rest for the evaluation set. The tensor is small enough to conduct a single forward pass over all examples.
+
+We then train our sparse autoencoder over approximately 500 epochs with a reconstruction and sparsity loss, using the Adam optimiser. Exact training details, including hyperparameters, are given in both Section \ref{sec:results} and the Appendix.
+
+
+Once we have learned our features, we can use them to identify circuits in the model, either at the node-level or edge-level. Informally, our methodology involves just looking at the max-activating code for each learned representation in order to discretise it, representing the most salient features detected by each attention head. For node-level identification, we focus on the presence of unique codes within these discrete representations, highlighting attention heads that respond distinctively to task-specific prompts versus those engaged by general or negative examples. Conversely, at the edge-level, we examine how these codes co-occur across different heads, identifying patterns of interaction that are uniquely associated with the model's task-specific responses.
+
+\paragraph{Node-Level Circuit Identification}
+This section outlines the process for automating the identification of the attention heads belonging to the ground-truth circuit. We define the task through a dual set of inputs: a collection of prompts $\left\{x_i\right\}_{i=1}^n$ that elicit a distinct response pattern from the model, and a corresponding set of prompts $\left\{x_i^\prime\right\}_{i=1}^n$ where the model's task-specific behavior is absent or negated. The activations obtained from processing $\left\{x_i^\prime\right\}_{i=1}^n$ serve as the `corrupted' dataset for analysis.
+
+Upon concluding the training of the sparse autoencoder, we conduct a forward pass of all examples $\left\{x_i\right\}_{i=1}^n \bigcup \left\{x_i^\prime\right\}_{i=1}^n$ through the encoder $E$ of the model to obtain our learned activations $\mathbf{z} \in \mathbb{R}^{\text{batch}\times n_\text{heads}\times n_\text{feat}}$. We then apply an argmax operation across the feature dimension of the encoder's output, thereby condensing the complex activation patterns into a sequence of discrete indices or `codes', each representing the predominant feature for a respective attention head:
+\begin{align*}
+\mathbf{z}_\text{discrete} = \text{argmax}_{\text{axis}=2}(\mathbf{z})
+\end{align*}
+To ascertain the significance of each head in relation to the task, we examine the distribution of these `codes' across the positive and negative example sets. Specifically, for each individual component (i.e. attention head) we compute the number of codes in that attention head that only occur in positive examples.
+
+We denote $\mathbf{p} \in \mathbb{R}^{n_\text{heads} \times n_\text{feat}}$ to be the matrix of one-hot vectors representing which codes are activated for each head for the positive examples $x_i$. Similarly, $\mathbf{n} \in \mathbb{R}^{n_\text{heads} \times n_\text{feat}}$ is the same matrix for the negative examples. Then, we construct a vector $\mathbf{u}\in \mathbb{R}^{n_\text{heads}}$ where element $i$ is given by
+\begin{align*}
+\mathbf{u}_i = \frac{|\mathbf{p}_i \setminus \mathbf{n}_i|}{|\mathbf{p}_i \cup \mathbf{n}_i|}
+\end{align*}
+where $i \in \{0, n_\text{heads}-1\}$, and $|\cdot|$ denotes the cardinality of the set, indicating the count of unique codes exclusive to positive examples in each head. To ensure comparability across heads and to account for the varying prevalences of codes, we normalise the counts in $\mathbf{u}$ by the total number of unique codes identified across both positive and negative examples for each head before applying softmax.
+
+Finally, we take the softmax of $\mathbf{u}$ to normalise it, so that we can compare thresholds across datasets and autoencoders with different numbers of learned features. Additionally, normalising $\mathbf{u}$ with softmax allows us to compute the receiver operating characteristic (ROC) curve, which charts the true-positive rate against the false positive rate as we vary the threshold required for a head to be deemed as part of the circuit. This in turn permits the calculation of AUC and F1 score, and allows us to analyse the robustness of selecting a specific threshold across datasets.
+
+\paragraph{Edge-Level Circuit Identification}
+We can also identify circuits by examining the importance of edges between model components rather than individual nodes; this is the approach largely undertaken in \citet{conmy2024towards}. This involves examining the interactions between attention heads, thereby capturing the dynamics of information flow within the model. Similar to the node-level analysis, we leverage both a set of eliciting prompts $\left\{x_i\right\}_{i=1}^n$ and their corresponding negated versions $\left\{x_i^\prime\right\}_{i=1}^n$ to differentiate between task-specific and non-specific behaviors.
+
+For each example, we generate a co-occurrence matrix $\mathbf{C} \in \mathbb{R}^{n_{\text{heads}} \times n_{\text{heads}} \times n_{\text{feat}} \times n_{\text{feat}}}$, where each entry $\mathbf{C}_{h1,h2,c1,c2}$ quantifies the frequency of co-occurrence between codes $c1$ and $c2$ in heads $h1$ and $h2$, respectively. This matrix is constructed separately for both the positive and negative sets of activations, denoted as $\mathbf{C}^+$ and $\mathbf{C}^-$, using the indices from the argmax operation:
+
+\begin{align*}
+\mathbf{C}_{h1,h2,c1,c2}^+ &= \text{Count of }(c1, c2) \text{ co-occurrences in positive examples between } h1 \text{ and } h2, \\
+\mathbf{C}_{h1,h2,c1,c2}^- &= \text{Count of }(c1, c2) \text{ co-occurrences in negative examples between } h1 \text{ and } h2.
+\end{align*}
+
+Normalisation is applied to both $\mathbf{C}^+$ and $\mathbf{C}^-$ to account for the total co-occurrence frequencies, ensuring a balanced comparison of co-occurrence patterns across all head pairs. The normalized matrices, $\mathbf{\hat{C}}^+$ and $\mathbf{\hat{C}}^-$, represent the proportion of each co-occurrence relative to the total co-occurrences for each head pair:
+
+\begin{align*}
+\mathbf{\hat{C}}^+_{h1,h2,:,:} &= \frac{\mathbf{C}^+_{h1,h2,:,:}}{\sum \mathbf{C}^+_{h1,h2,:,:}} & \mathbf{\hat{C}}^-_{h1,h2,:,:} &= \frac{\mathbf{C}^-_{h1,h2,:,:}}{\sum \mathbf{C}^-_{h1,h2,:,:}}.
+\end{align*}
+
+To pinpoint the unique, task-specific interactions, we calculate the set of unique co-occurrences in positive examples not present in the negative set, and vice versa. This is expressed as $\mathbf{U} \in \mathbb{R}^{n_{\text{heads}} \times n_{\text{heads}}}$, where each entry $\mathbf{U}_{h1,h2}$ is normalised by the total number of co-occurrences for the corresponding head pair, combining both positive and negative matrices for a comprehensive view:
+
+\begin{align*}
+\mathbf{U}_{h1,h2} = \frac{|\mathbf{\hat{C}}^+_{h1,h2,:,:} > 0 \land \mathbf{\hat{C}}^-_{h1,h2,:,:} = 0|}{|\mathbf{\hat{C}}^+_{h1,h2,:,:} > 0| + |\mathbf{\hat{C}}^-_{h1,h2,:,:} > 0|}.
+\end{align*}
+
+Subsequently, the softmax function is applied to $\mathbf{U}$ to further normalise these values, facilitating comparison across different datasets and model configurations.
+
+Leveraging these normalised, unique co-occurrence counts, we employ receiver operating characteristic (ROC) curve analysis to evaluate the predictive power of these interactions in identifying the circuit components relevant to the model's task-specific behaviour. This includes calculating the Area Under the Curve (AUC) and F1 score, paralleling our node-level analysis but focusing on the edge dynamics within the network. 
+
+\subsection{Limitations}
+
+\section{Evaluation Criteria}
+
+In order to evaluate the effectiveness of our proposed method, we will need to understand if it can perform as well as existing circuit-identification algorithms, or better, in significantly less time. However, whilst our proposed method is not sensitive to metric choice or ablation method, we have introduced some hyperparameters, namely the threshold for identifying a head as part of the circuit (in node-level identification) and the threshold for identifying the connection between two heads as part of the circuit (in edge-level identification). A key part of our evaluation will be determining whether our method is relatively robust to the choice of this threshold. Finally, we will determine how various ablations affect the performance of our method, including the framing of negative examples, the use of unrelated ``easy negatives'', the effect of normalising the number of unique codes, and full hyperparameter sweeps. 
+
+\subsection{Node-level and edge-level evaluation across thresholds}
+
+In order to measure the performance of a circuit identification method, we must understand both its precision and recall. That is, whether the technique is able to have a high true-positive rate (TPR) by correctly identifying the subgraph in the circuit, and simultaneously having a low false-positive rate (FPR) whereby the method does not identify components that are not in the circuit. 
+
+Suppose we view circuit-identification as a binary classification task, where a method must predict whether an individual head belongs in the ground-truth circuit. For both the node-level and edge-level evaluation, we can use the receiver operating characteristic (ROC) curve which graphically visualises the TPR and FPR. Furthermore, we can calculate the area under the curve (AUC) as a single scalar metric of the performance of a given method. AUC results are also available for the three existing methods (ACDC, SP and HISP) in \citet{conmy2024towards}.
+
+
+\subsection{Demonstrating performance is robust to hyperparameter choice}
+
+A key failure mode of existing methods is their sensitivity to hyperparameter choice. Whilst we have significantly less hyperparameters than the three existing methods we choose to compare with (we have a single hyperparameter for both node-level and edge-level discovery, which is the threshold for a component to be included), we must still demonstrate two things. 
+
+\paragraph{Hyperparameters for sparse autoencoder}
+First, we must demonstrate that the hyperparameters used in the training of the sparse autoencoder, namely the number of features and the sparsity penalty $\lambda$, do not overly affect the performance of our method. To measure this, we will train the sparse autoencoder using a grid search over $n_\text{feat} \in \{128, 256, 512, 1024, 2048, 4096\}$ and $\lambda \in \{1e-3, 1e-2, 1e-1, 2e-1, 5e-1, 10e-1, 50e-1\}$. We will then determine the best combination of hyperparameters across the three datasets, in terms of the AUC of identified codes (where AUC and ROC is calculated across all thresholds). We will consider the method to be robust to the autoencoder hyperparameters if the optimal hyperparameters are approximately the same across datasets.
+
+\paragraph{Threshold hyperparameter in selection}
+Second, we must show that our method is also robust to the choice of threshold across datasets. To do so, we will take the models trained above with a common $n_\text{feat}$ and $\lambda$, and calculate the F1-score at each threshold used for both node-level and edge-level circuit identification. F1-score is calculated as the harmonic mean of precision and recall:
+\begin{align*}
+F1 = \frac{2\text{TP}}{2\text{TP} + (\text{FP} + \text{FN})}
+\end{align*}
+where TP is the number of true positives, FP is the number of false positives, and FN is the number of false negatives.
+
+Recall that due to the softmax on the rows of the occurrence and co-occurrence matrices (corresponding to layers in the original transformer), threshold is a value that can be between 0 and 1. We will then report the threshold for each dataset that achieves the maximal F1 score. If the maximising thresholds are approximately the same across the three datasets, we will consider our method to be robust to this hyperparameter.
+
+An additional piece of evidence that our method is robust to threshold is setting the threshold to the mean of the optimal thresholds found above, and then re-running the circuit identification with this common threshold. If the F1 score for each dataset remains approximately the same, this also demonstrates a lack of sensitivity of our final performance to perturbations of our key hyperparameter. This will allow us to set a common hyperparameter for a new dataset with an unknown ground-truth and be relatively confident that our method will find the correct circuit.
+
+\subsection{Empirical and theoretical complexity comparison}
+
+
+
+\subsection{Ablation studies}
+
+\color{green}
+To-do:
 \begin{itemize}
-\item VQ-VAE with perplexity loss on hidden states
-\item VQ-VAE for sequences of residual streams $\rightarrow$ sequence of codes $\rightarrow$ pick up algorithms in real-world circuits
+\item Side-by-side unique positive indices and ground-truth imshows (node-level)
+\item ROC curves (node-level)
+\item Co-occurrence matrices (edge-level)
+\item Table showing the best \texttt{n\_features} and \texttt{lambda} for maximising ROC AUC; this shows robustness of method if all are really similar
+\item Similarly, table showing ROC AUC and F1 at \textit{one} single set of hyperparameters across all datasets (including single threshold)
+\item Bring ``easy negatives'' section up here
+\item Sparsity examination i.e. $\ell_0$ norm statistics, dead codes, firing rates, histogram of activations of certain codes (and thresholds when softmaxed), etc
+\item Causal intervention with codes
+\item Showing that the method gets 100\% accuracy on Tracr-compiled transformers and then compressed SGD-trained Tracr-compiled transformers
+\item KL divergence between model/ablated vs. number of included components (see Conmy diagram). Will somehow need to get the HISP, SP and ACDC data in there. 
 \end{itemize}
 \color{black}
 
-\section{Evaluation Criteria}
+
 
 \printbibliography %Prints bibliography
 
